@@ -8,6 +8,7 @@ SPARTAN_USER_DIR, ...). Extra arguments go to spartanport-probe.
 The in-game "Apply and restart" runs this script again through SPARTAN_RESTART_COMMAND;
 `--after PID` waits for the previous game process to end first (its GPU device and memory).
 """
+import json
 import os
 import platform
 from pathlib import Path
@@ -180,6 +181,28 @@ def pause_menu_args(game, out, mounts):
     return [part for path in made.values() for part in ('--pause-menu', str(path))]
 
 
+def macos_icd_manifest(probe, out):
+    """A copy of the bundled Vulkan manifest with the driver library's absolute path.
+
+    The loader resolves a relative `library_path` against the working directory, and the game
+    runs from the port folder, not from the manifest's folder, so the path is resolved here and
+    the copy is written beside the prepared image. Returns None when the port has no manifest.
+    """
+    for name in ('vulkan/kosmickrisp_mesa_icd.json', 'kosmickrisp_mesa_icd.json'):
+        source = Path(probe).parent / name
+        if not source.is_file():
+            continue
+        manifest = json.loads(source.read_text(encoding='utf-8'))
+        library = Path(manifest['ICD']['library_path'])
+        if not library.is_absolute():
+            library = (source.parent / library).resolve()
+        manifest['ICD']['library_path'] = str(library)
+        target = Path(out) / 'kosmickrisp_mesa_icd.json'
+        target.write_text(json.dumps(manifest), encoding='utf-8')
+        return target
+    return None
+
+
 def main():
     if MACOS and (error := macos_runtime_error()):
         fail(error)
@@ -234,10 +257,10 @@ def main():
     # manifest build.sh writes next to the probe.
     if MACOS:
         env.setdefault('ROSETTA_ADVERTISE_AVX', '1')
-        for icd in (probe.parent / 'vulkan' / 'kosmickrisp_mesa_icd.json', probe.parent / 'kosmickrisp_mesa_icd.json'):
-            if icd.is_file():
-                env.setdefault('VK_DRIVER_FILES', str(icd))
-                break
+        if not env.get('VK_DRIVER_FILES'):
+            manifest = macos_icd_manifest(probe, out)
+            if manifest:
+                env['VK_DRIVER_FILES'] = str(manifest)
     # Development builds run from the MSYS2 tree: its CLANG64 DLLs (SDL3, FFmpeg, ...).
     if WINDOWS and not (probe.parent / 'SDL3.dll').is_file():
         clang64 = Path(env.get('MSYS2_ROOT', r'C:\msys64')) / 'clang64' / 'bin'
