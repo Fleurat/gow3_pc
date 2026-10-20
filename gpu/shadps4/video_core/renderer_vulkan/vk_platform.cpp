@@ -25,6 +25,7 @@
 #include "video_core/renderer_vulkan/vk_dlss.h"
 
 #ifdef __APPLE__
+#include <dlfcn.h>
 #include <mach-o/dyld.h>
 #endif
 
@@ -267,9 +268,18 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
     spartanport_macos_vulkan_driver();
 #endif
 
+#if defined(__APPLE__)
+    // vk::detail::DynamicLoader loads "libvulkan.dylib" and "libvulkan.1.dylib" by name, and dyld
+    // searches those names outside the bundle: take the loader this binary already links instead.
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(
+        reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(RTLD_DEFAULT, "vkGetInstanceProcAddr")));
+#else
     static vk::detail::DynamicLoader dl;
     VULKAN_HPP_DEFAULT_DISPATCHER.init(
         dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr"));
+#endif
+    ASSERT_MSG(VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr,
+               "Vulkan loader not found: vkGetInstanceProcAddr is missing");
 
     const auto [available_version_result, available_version] =
         VULKAN_HPP_DEFAULT_DISPATCHER.vkEnumerateInstanceVersion
